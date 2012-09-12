@@ -1,0 +1,24 @@
+*.py[co]
+
+.~lock.*
+Paste*
+
+# Packages
+*.egg
+*.egg-info
+dist
+build
+eggs
+parts
+bin
+var
+sdist
+develop-eggs
+src
+include
+lib
+.mr.developer.cfg
+.installed.cfg
+
+*.[a-z]*~
+
