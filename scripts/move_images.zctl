@@ -1,0 +1,55 @@
+import re
+import sys
+
+import transaction
+from Testing import makerequest
+from AccessControl.SecurityManagement import newSecurityManager
+from Products.CMFCore.utils import getToolByName
+from zope.component import queryUtility
+
+
+def get_images(content, pc):
+    exp=re.compile('src=\"resolveuid/(.*?)\"')
+    uids = exp.findall(content) 
+    query = {'UID': uids}
+    brains = pc(query)
+    if brains:
+        return [brain.getObject() for brain in brains]
+    return []
+
+def move_images(assessmentitem, images):
+    print 'Moving images for %s' %assessmentitem.Title()
+    for count, image in enumerate(images):
+        print 'Copying image %s' %image
+
+
+app = makerequest.makerequest(app)
+portal = getattr(app, sys.argv[-1])
+
+user = app.acl_users.getUser('admin')
+newSecurityManager(None, user.__of__(app.acl_users))
+portal.setupCurrentSkin(portal.REQUEST)
+
+pc = getToolByName(portal, 'portal_catalog')
+query = {'portal_type': 'upfront.assessmentitem.content.assessmentitem'}
+brains = pc(query)
+
+names = [
+    'activity',
+    'content_concept_skills',
+    'prior_knowledge_skills',
+    'equipment_and_administration',
+]
+images = {}
+for count, brain in enumerate(brains):
+    print '=================================================================='
+    print 'Process assessment item %s of %s' % (count, len(brains))
+    assessmentitem = brain.getObject().aq_base
+    for name in names:
+        value = getattr(assessmentitem, name)
+        if value:
+            images[assessmentitem] = get_images(value.raw, pc)
+    move_images(assessmentitem, images[assessmentitem])
+
+import pdb;pdb.set_trace()
+print len(images)
