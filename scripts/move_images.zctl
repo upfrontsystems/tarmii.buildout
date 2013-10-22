@@ -1,26 +1,121 @@
 import re
 import sys
+from types import ListType
+from itertools import chain
 
 import transaction
 from Testing import makerequest
 from AccessControl.SecurityManagement import newSecurityManager
 from Products.CMFCore.utils import getToolByName
+from Products.CMFDynamicViewFTI.permissions import ModifyViewTemplate
+from Products.ATContentTypes.permission import ModifyConstrainTypes
+from Products.ATContentTypes.lib.constraintypes import ENABLED
+from plone.app.textfield import RichText
+from plone.app.textfield.value import RichTextValue
 from zope.component import queryUtility
+from ZODB.POSException import POSKeyError                                       
 
+from tarmii.theme.behaviors import IItemMetadata
+
+RESOLVE_EXP = re.compile('src=\"resolveuid/(.*?)\"')
+
+CONTENT_ATTR_NAMES = {
+    'activity': IItemMetadata.get('activity'),
+    'content_concept_skills': IItemMetadata.get('content_concept_skills'),
+    'prior_knowledge_skills': IItemMetadata.get('prior_knowledge_skills'),
+    'equipment_and_administration': IItemMetadata.get('equipment_and_administration'),
+}
 
 def get_images(content, pc):
-    exp=re.compile('src=\"resolveuid/(.*?)\"')
-    uids = exp.findall(content) 
+    uids = RESOLVE_EXP.findall(content) 
     query = {'UID': uids}
     brains = pc(query)
     if brains:
         return [brain.getObject() for brain in brains]
     return []
 
-def move_images(assessmentitem, images):
-    print 'Moving images for %s' %assessmentitem.Title()
-    for count, image in enumerate(images):
-        print 'Copying image %s' %image
+def copy_images(portal, assessmentitem, images):
+    if images:
+        print 'Copying images to %s' %assessmentitem.Title()
+        for count, old_image in enumerate(images):
+            print '    old_image %s' %old_image
+            try:
+                cp = portal.manage_copyObjects(old_image.getId(), None, None)
+                result = assessmentitem.manage_pasteObjects(cp, None)
+                new_image = assessmentitem._getOb(result[0]['new_id'])
+                update_image_refs(portal, assessmentitem, old_image, new_image)
+            except:
+                print '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+                print 'Error:'
+                print 'Could not move image %s' % old_image
+                print '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
+
+def update_image_refs(portal, assessmentitem, old_image, new_image):
+    # look in each of the richtext fields for the resolveuid string
+    for name, field in CONTENT_ATTR_NAMES.items():
+        value = IItemMetadata.get(name).get(assessmentitem)
+        if value is None: continue
+
+        if isinstance(field, RichText):
+            refs = RESOLVE_EXP.findall(value.raw) 
+            if not refs: continue
+            # replace it with a path to the new image
+            old_ref = 'src="resolveuid/%s"' % old_image.UID()
+            new_ref = 'src="%s"' % new_image.getId() 
+            raw = value.raw.replace(old_ref, new_ref)
+            value = RichTextValue(raw=raw,
+                                  mimeType='text/html',
+                                  outputMimeType='text/x-html-safe',
+                                  encoding='utf-8')
+            IItemMetadata.get(name).set(assessmentitem, value)
+
+def split_used_from_unused_images(portal, image):
+    used_images = set(chain.from_iterable(images.values()))
+    all_images = set(portal.objectValues(spec='ATBlob'))
+    unused_images = all_images.difference(used_images)
+    return used_images, unused_images
+
+def remove_images(portal, used_images):
+    # use 'set' to ensure we don't have duplicate ids
+    ids = set([i.getId() for i in used_images])
+    portal_ids = set(portal.objectIds())
+    # make sure it is actually still in the root
+    ids = portal_ids.intersection(ids)
+    # because manage_delObjects wants a list
+    ids = ListType(ids)
+    portal.manage_delObjects(ids, None)
+
+def move_unused_images_out_of_root(portal, unused_images):
+    bad_images = []
+    folder_id = 'images'
+    title = 'Images'
+    if not portal.hasObject(folder_id):
+        portal.invokeFactory(type_name='Folder', id=folder_id, title=title)
+    folder = portal._getOb(folder_id)
+    folder.setConstrainTypesMode(ENABLED)
+    allowed_types = ['Image',]
+    folder.setLocallyAllowedTypes(allowed_types)
+    folder.setImmediatelyAddableTypes(allowed_types)
+
+    # Nobody is allowed to modify the constraints or tweak the
+    # display here
+    folder.manage_permission(ModifyConstrainTypes, roles=[])
+    folder.manage_permission(ModifyViewTemplate, roles=[])
+    
+    for image in unused_images:
+        try:
+            cp = portal.manage_copyObjects(image.getId(), None, None)
+            folder.manage_pasteObjects(cp, None)
+        except POSKeyError:
+            bad_images.append(image)
+            continue
+        except AttributeError:
+            bad_images.append(image)
+            continue
+
+    portal.manage_delObjects([i.getId() for i in unused_images])
+
+    return bad_images
 
 
 app = makerequest.makerequest(app)
@@ -30,26 +125,33 @@ user = app.acl_users.getUser('admin')
 newSecurityManager(None, user.__of__(app.acl_users))
 portal.setupCurrentSkin(portal.REQUEST)
 
+tinymce = getToolByName(portal, 'portal_tinymce')
+if tinymce.rooted == False or tinymce.link_using_uids == True:
+    print 'TinyMCE rooted must be True and link_using_uids must be False'
+    sys.exit(1)
+
 pc = getToolByName(portal, 'portal_catalog')
 query = {'portal_type': 'upfront.assessmentitem.content.assessmentitem'}
 brains = pc(query)
 
-names = [
-    'activity',
-    'content_concept_skills',
-    'prior_knowledge_skills',
-    'equipment_and_administration',
-]
 images = {}
 for count, brain in enumerate(brains):
     print '=================================================================='
     print 'Process assessment item %s of %s' % (count, len(brains))
-    assessmentitem = brain.getObject().aq_base
-    for name in names:
-        value = getattr(assessmentitem, name)
-        if value:
-            images[assessmentitem] = get_images(value.raw, pc)
-    move_images(assessmentitem, images[assessmentitem])
+    assessmentitem = brain.getObject()
+    for name, field in CONTENT_ATTR_NAMES.items():
+        if isinstance(field, RichText):
+            value = IItemMetadata.get(name).get(assessmentitem)
+            if value is not None:
+                images[assessmentitem] = get_images(value.raw, pc)
+    copy_images(portal, assessmentitem, images[assessmentitem])
 
-import pdb;pdb.set_trace()
+used_images, unused_images = split_used_from_unused_images(portal, images)
+remove_images(portal, used_images)
+# not sure if we should do the next step without making sure what uses these
+# images first. Especially since we are changing from usind UIDs to paths for
+# images referencing in richtext fields.
+move_unused_images_out_of_root(portal, unused_images)
+
+transaction.commit()
 print len(images)
