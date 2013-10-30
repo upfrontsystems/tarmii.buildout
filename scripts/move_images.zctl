@@ -1,3 +1,13 @@
+""" Prepare for going live:
+    
+    Make sure that Images are allowed in assessmentitems.
+
+    Check the activities folder for any activities that are in any state other
+    than 'published internally' and remove them.
+
+    This script will only move activities in wf state 'published internally'.
+"""
+
 import re
 import sys
 from types import ListType
@@ -17,7 +27,7 @@ from ZODB.POSException import POSKeyError
 
 from tarmii.theme.behaviors import IItemMetadata
 
-RESOLVE_EXP = re.compile('src=\"resolveuid/(.*?)\"')
+RESOLVE_EXP = re.compile('src=\"(.*?)resolveuid/(.*?)\"') 
 
 CONTENT_ATTR_NAMES = {
     'activity': IItemMetadata.get('activity'),
@@ -27,27 +37,36 @@ CONTENT_ATTR_NAMES = {
 }
 
 def get_images(content, pc):
-    uids = RESOLVE_EXP.findall(content) 
+    # We might be dealing with a src link like:
+    # src="http://tarmii.upfronthosting.co.za/resolveuid/[UID]" or
+    # src="resolveuid/[UID]"
+    uids = [match[1] for match in RESOLVE_EXP.findall(content)]
     query = {'UID': uids}
     brains = pc(query)
     if brains:
         return [brain.getObject() for brain in brains]
-    return []
+    return None
 
 def copy_images(portal, assessmentitem, images):
     if images:
         print 'Copying images to %s' %assessmentitem.Title()
         for count, old_image in enumerate(images):
-            print '    old_image %s' %old_image
+            print '    old_image #%s (%s)' % (count, old_image.getId())
             try:
-                cp = portal.manage_copyObjects(old_image.getId(), None, None)
-                result = assessmentitem.manage_pasteObjects(cp, None)
-                new_image = assessmentitem._getOb(result[0]['new_id'])
+                new_image = None
+                if old_image.getId() in assessmentitem.objectIds():
+                    new_image = assessmentitem._getOb(old_image.getId())
+                else:
+                    folder = old_image.aq_parent
+                    cp = folder.manage_copyObjects(old_image.getId(), None, None)
+                    result = assessmentitem.manage_pasteObjects(cp, None)
+                    new_image = assessmentitem._getOb(result[0]['new_id'])
                 update_image_refs(portal, assessmentitem, old_image, new_image)
             except:
+                raise
                 print '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
                 print 'Error:'
-                print 'Could not move image %s' % old_image
+                print 'Could not move image %s' % old_image.getId()
                 print '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~'
 
 def update_image_refs(portal, assessmentitem, old_image, new_image):
@@ -57,9 +76,11 @@ def update_image_refs(portal, assessmentitem, old_image, new_image):
         if value is None: continue
 
         if isinstance(field, RichText):
-            refs = RESOLVE_EXP.findall(value.raw) 
+            exp = re.compile('src=\"resolveuid/%s\"' % old_image.UID()) 
+            refs = exp.findall(value.raw) 
             if not refs: continue
-            # replace it with a path to the new image
+
+            # replace all with path to the new image
             old_ref = 'src="resolveuid/%s"' % old_image.UID()
             new_ref = 'src="%s"' % new_image.getId() 
             raw = value.raw.replace(old_ref, new_ref)
@@ -67,9 +88,11 @@ def update_image_refs(portal, assessmentitem, old_image, new_image):
                                   mimeType='text/html',
                                   outputMimeType='text/x-html-safe',
                                   encoding='utf-8')
-            IItemMetadata.get(name).set(assessmentitem, value)
 
-def split_used_from_unused_images(portal, image):
+            IItemMetadata.get(name).set(assessmentitem, value)
+            new_value = IItemMetadata.get(name).get(assessmentitem).raw
+
+def split_used_from_unused_images(portal, images):
     used_images = set(chain.from_iterable(images.values()))
     all_images = set(portal.objectValues(spec='ATBlob'))
     unused_images = all_images.difference(used_images)
@@ -134,7 +157,7 @@ pc = getToolByName(portal, 'portal_catalog')
 query = {'portal_type': 'upfront.assessmentitem.content.assessmentitem'}
 brains = pc(query)
 
-images = {}
+item_images = {}
 for count, brain in enumerate(brains):
     print '=================================================================='
     print 'Process assessment item %s of %s' % (count, len(brains))
@@ -143,15 +166,29 @@ for count, brain in enumerate(brains):
         if isinstance(field, RichText):
             value = IItemMetadata.get(name).get(assessmentitem)
             if value is not None:
-                images[assessmentitem] = get_images(value.raw, pc)
-    copy_images(portal, assessmentitem, images[assessmentitem])
+                images = get_images(value.raw, pc)
+                if images is not None:
+                    tmp_images = item_images.get(assessmentitem, [])
+                    tmp_images.extend(images)
+                    item_images[assessmentitem] = tmp_images
 
-used_images, unused_images = split_used_from_unused_images(portal, images)
+    tmp_images = item_images.get(assessmentitem, [])
+    if len(tmp_images) > 0:
+        copy_images(portal, assessmentitem, tmp_images)
+    else:
+        print 'Skipping item %s; it has no images.' % assessmentitem.getId()
+
+used_images, unused_images = split_used_from_unused_images(portal, item_images)
 remove_images(portal, used_images)
 # not sure if we should do the next step without making sure what uses these
 # images first. Especially since we are changing from usind UIDs to paths for
 # images referencing in richtext fields.
 move_unused_images_out_of_root(portal, unused_images)
 
+# persist the changes
 transaction.commit()
-print len(images)
+
+assessmentitems = ['/'.join(aitem.getPhysicalPath()) for aitem in item_images.keys()]
+af = open('assessmentitems.txt', 'wb')
+af.write('\n'.join(assessmentitems))
+af.close()
