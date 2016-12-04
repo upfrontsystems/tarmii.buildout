@@ -50,7 +50,7 @@ else:
 
 # We decided to always use distribute, make sure this is the default for us
 # USE_DISTRIBUTE = options.distribute
-USE_DISTRIBUTE = True
+USE_DISTRIBUTE = False
 args = args + ['bootstrap']
 
 to_reload = False
