@@ -16,7 +16,8 @@ from AccessControl.SecurityManagement import newSecurityManager
 from zope.app.component.hooks import setSite
 from plone.uuid.interfaces import IUUID
 
-from html2wordml import convertPixelsToEMU, gridcolwidth, tcwidth, imgsize
+from upfront.wordmlutils.html2wordml import convertPixelsToEMU, \
+    gridcolwidth, tcwidth, imgsize
 
 app = makerequest.makerequest(app)
 portal = getattr(app, sys.argv[-1])
