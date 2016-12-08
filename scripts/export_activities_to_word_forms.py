@@ -111,6 +111,9 @@ TAG_RUN           = NS_W+'r'
 TAG_TEXT          = NS_W+'t'
 TAG_BREAK         = NS_W+'br'
 
+TAG_PLACEHOLDER   = NS_W+'showingPlcHdr'
+TAG_RUNSTYLE      = NS_W+'rStyle'
+ATTRIB_VAL        = NS_W+'val'
 
 def normalize_image_urls(doc, image_src_map):
     for img in doc.xpath('//img'):
@@ -186,6 +189,16 @@ def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
             field_content.append(child)
 
     xmlroot = etree.fromstring(wordml)
+
+    # remove showPlaceHldr tags
+    for elem in xmlroot.getiterator(TAG_PLACEHOLDER):
+        elem.getparent().remove(elem)
+
+    # replace PlaceHolderText style with bold
+    for elem in xmlroot.getiterator(TAG_RUNSTYLE):
+        if elem.attrib.get(ATTRIB_VAL) == "PlaceholderText":
+            elem.getparent().remove(elem)
+
     for field in xmlroot.getiterator(TAG_FIELD):
         field_tag = field.find(TAG_FIELDPROP+'/'+TAG_FIELDTAG)
         tag = field_tag.get(ATTR_FIELDTAGVAL, None)
@@ -359,4 +372,6 @@ for language in portal.topictrees.language.objectValues():
                             equipment_and_administration, topics)
 
             print "Exporting %s " % obj.id
+
+        import pdb; pdb.set_trace()
 
