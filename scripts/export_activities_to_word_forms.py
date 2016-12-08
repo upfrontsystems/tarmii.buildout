@@ -373,5 +373,4 @@ for language in portal.topictrees.language.objectValues():
 
             print "Exporting %s " % obj.id
 
-        import pdb; pdb.set_trace()
 
