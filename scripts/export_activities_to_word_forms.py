@@ -238,6 +238,7 @@ def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
         except IOError, e:
             print "Can't export", item_id
             print e.message
+            return
         width, height = img.size
 
         # insert image before document
