@@ -42,7 +42,11 @@ def get_images_from_html(htmltext):
 
     images = {}
     image_src_map = {}
-    rel_id_map = {}
+
+    def rel_img_name(rel_id, imgname):
+        parts = imgname.split('.')
+        ext = parts[-1].lower()
+        return '%s.%s' % (rel_id, ext)
 
     doc = html.fromstring(htmltext.decode('utf-8'))
     for count, element in enumerate(doc.xpath("//*[@src]")):
@@ -53,6 +57,24 @@ def get_images_from_html(htmltext):
             src = src.split('/@@images')[0]
             image_src_map[original_src] = src
 
+        elif 'http' in src:
+            imgname = src.split('/')[-1]
+            data = urllib.urlopen(src)
+            data = StringIO(data.read())
+            imgname = rel_img_name(rel_id, imgname)
+            image_src_map[original_src] = imgname
+            images[imgname] = data
+            continue
+        elif 'data:image' in src:
+            basesplit = src.split(';base64,') 
+            data = basesplit[1].decode('base64')
+            ext = basesplit[0].split('/')[-1]
+            imgname = '%s.%s' % (obj.id, ext)
+            imgname = rel_img_name(rel_id, imgname)
+            images[imgname] = StringIO(data)
+            image_src_map[original_src] = imgname
+            continue
+
         if 'resolveuid' in src:
             uid = src.split('/')[-1]
             r = portal.portal_catalog(UID=uid)
@@ -61,36 +83,19 @@ def get_images_from_html(htmltext):
             else:
                 element.attrib['src'] = ''
                 continue
-        elif 'http' in src:
-            imgname = src.split('/')[-1]
-            data = urllib.urlopen(src)
-            data = StringIO(data.read())
-            image_src_map[original_src] = imgname
-            rel_id_map[imgname] = rel_id
-            images[imgname] = data
-            continue
-        elif 'data:image' in src:
-            basesplit = src.split(';base64,') 
-            data = basesplit[1].decode('base64')
-            ext = basesplit[0].split('/')[-1]
-            imgname = '%s.%s' % (obj.id, ext)
-            images[imgname] = StringIO(data)
-            image_src_map[original_src] = imgname
-            rel_id_map[imgname] = rel_id
-            continue
         else:
             img = obj.unrestrictedTraverse(src)
 
-        image_src_map[original_src] = img.id
-        rel_id_map[img.id] = rel_id
+        imgname = rel_img_name(rel_id, img.id)
+        image_src_map[original_src] = imgname
 
         try:
-            images[img.id] = StringIO(img.data)
+            images[imgname] = StringIO(img.data)
         except:
             print "No blob file for", img.id
             continue
 
-    return images, image_src_map, rel_id_map
+    return images, image_src_map
 
 
 # namespace for word XML tags:
@@ -107,7 +112,7 @@ TAG_TEXT          = NS_W+'t'
 TAG_BREAK         = NS_W+'br'
 
 
-def normalize_image_urls(doc, image_src_map, rel_id_map):
+def normalize_image_urls(doc, image_src_map):
     for img in doc.xpath('//img'):
         if not img.attrib.has_key('src'):
             img.getparent().remove(img)
@@ -117,7 +122,8 @@ def normalize_image_urls(doc, image_src_map, rel_id_map):
             img.getparent().remove(img)
             continue
         filename = image_src_map[src]
-        img.set('src', rel_id_map[filename])
+        relid = filename.split('.')[0]
+        img.set('src', relid)
 
 
 def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
@@ -155,7 +161,7 @@ def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
     xslt_root = etree.XML(xslfile.read())
     transform = etree.XSLT(xslt_root)
 
-    images, image_src_map, rel_id_map = get_images_from_html(htmltext)
+    images, image_src_map = get_images_from_html(htmltext)
 
     scripts_dir = os.path.join(os.getcwd(), 'scripts')
     template = zipfile.ZipFile(os.path.join(scripts_dir, 'form_template.docx'))
@@ -170,7 +176,7 @@ def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
     def _transform(field_content, content):
         content = "<html><body>%s</body></html>" % content
         doc = soupparser.fromstring(content)
-        normalize_image_urls(doc, image_src_map, rel_id_map)
+        normalize_image_urls(doc, image_src_map)
         result_tree = transform(doc)
         dom = etree.fromstring(etree.tostring(result_tree))
         body = dom.getchildren()[0]
@@ -210,7 +216,7 @@ def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
     relmap = {}
     for filename, img in images.items():
 
-        relid = rel_id_map[filename]
+        relid = filename.split('.')[0]
         count = relid[5:]
 
         # insert image sizes in the wordml
@@ -243,6 +249,17 @@ def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
 
     relsxml = etree.tostring(rels)
 
+    typesxml = None
+    if len(images) > 0:
+        types = template.read('[Content_Types].xml')
+        types = etree.parse(StringIO(types)).getroot()
+        typesxml = '<Default Extension="png" ContentType="image/png"/>'
+        try:
+            types.append(etree.fromstring(typesxml))
+        except:
+            raise str(typesxml)
+        typesxml = etree.tostring(types)
+
     for filepath in namelist:
         if filepath == 'word/document.xml':
             zf.writestr(filepath, wordml)
@@ -253,6 +270,8 @@ def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
             zf.writestr(filepath, filecontent.read())
         elif filepath.startswith('word/_rels/document.xml.rels'):
             zf.writestr(filepath, relsxml)
+        elif typesxml and filepath.startswith('[Content_Types].xml'):
+            zf.writestr(filepath, typesxml)
         else:
             content = template.read(filepath)
             zf.writestr(filepath, content)
