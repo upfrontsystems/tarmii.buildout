@@ -233,7 +233,11 @@ def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
         count = relid[5:]
 
         # insert image sizes in the wordml
-        img = Image.open(img)
+        try:
+            img = Image.open(img)
+        except IOError, e:
+            print "Can't export", item_id
+            print e.message
         width, height = img.size
 
         # insert image before document
