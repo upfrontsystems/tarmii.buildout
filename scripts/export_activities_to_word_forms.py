@@ -227,6 +227,11 @@ def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
     namelist = template.namelist()
     docindex = namelist.index('word/document.xml')
     relmap = {}
+
+    types = template.read('[Content_Types].xml')
+    types = etree.parse(StringIO(types)).getroot()
+    extensions = {}
+
     for filename, img in images.items():
 
         relid = filename.split('.')[0]
@@ -265,18 +270,21 @@ def create_word_doc(fname, item_id, intro, activity, content_concept_skills,
         except:
             raise str(relxml)
 
-    relsxml = etree.tostring(rels)
+        extension = filename.split('.')[-1].lower()
+        if not extensions.has_key(extension):
+            extensions[extension] = True
+            typesxml = '<Default Extension="%s" ContentType="image/%s"/>' % (
+                extension, extension)
+            try:
+                types.append(etree.fromstring(typesxml))
+            except:
+                raise str(typesxml)
 
-    typesxml = None
-    if len(images) > 0:
-        types = template.read('[Content_Types].xml')
-        types = etree.parse(StringIO(types)).getroot()
-        typesxml = '<Default Extension="png" ContentType="image/png"/>'
-        try:
-            types.append(etree.fromstring(typesxml))
-        except:
-            raise str(typesxml)
-        typesxml = etree.tostring(types)
+    relsxml = etree.tostring(rels)
+    typesxml = etree.tostring(types)
+
+    for ml in (wordml, relsxml, typesxml):
+        ml = '<?xml version="1.0" encoding="utf-8" standalone="yes"?>' + ml
 
     for filepath in namelist:
         if filepath == 'word/document.xml':
